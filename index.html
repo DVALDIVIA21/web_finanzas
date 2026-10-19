@@ -74,7 +74,6 @@
         }
         input:focus, select:focus { border-color: #888; }
         
-        /* Para que el icono del calendario se vea blanco en modo oscuro */
         input[type="date"]::-webkit-calendar-picker-indicator {
             filter: invert(1);
             cursor: pointer;
@@ -158,6 +157,55 @@
             color: var(--text-muted);
             text-align: center;
         }
+
+        /* --- RESUMEN MENSUAL (NUEVO) --- */
+        .monthly-summary-container {
+            background-color: var(--card-bg);
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            max-height: 350px;
+            overflow-y: auto;
+        }
+        
+        .monthly-summary-container::-webkit-scrollbar { width: 6px; }
+        .monthly-summary-container::-webkit-scrollbar-thumb { background: #444; border-radius: 10px; }
+
+        .monthly-summary-container h3 {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            text-align: center;
+        }
+
+        .month-item {
+            background: var(--input-bg);
+            padding: 12px 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            border-left: 3px solid var(--blue);
+        }
+
+        .month-header {
+            font-size: 13px;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 8px;
+            text-transform: capitalize;
+        }
+
+        .month-data {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+        }
+
+        .month-data span.income { color: var(--green); }
+        .month-data span.expense { color: var(--red); }
+        .month-data span.balance.pos { color: var(--green); font-weight: 600; }
+        .month-data span.balance.neg { color: var(--red); font-weight: 600; }
 
         /* --- HISTORIAL --- */
         .history-title {
@@ -314,10 +362,20 @@
                     </div>
                 </div>
 
+                <!-- Gráfico -->
                 <div class="chart-container">
                     <h3 style="font-size: 14px; color: #aaa;">Balance Visual</h3>
                     <div class="chart" id="chart">
                         <div class="chart-text" id="chart-text">Sin datos</div>
+                    </div>
+                </div>
+
+                <!-- NUEVO: Resumen Mensual -->
+                <div class="monthly-summary-container">
+                    <h3>Resumen Mensual</h3>
+                    <div id="monthly-summary-list">
+                        <!-- Aquí JS inyectará los meses -->
+                        <div style="color:#888; font-size:12px; text-align:center;">Cargando...</div>
                     </div>
                 </div>
             </div>
@@ -344,8 +402,8 @@
         const expenseEl = document.getElementById('total-expense');
         const chartEl = document.getElementById('chart');
         const chartTextEl = document.getElementById('chart-text');
+        const monthlySummaryList = document.getElementById('monthly-summary-list');
 
-        // Poner la fecha de hoy por defecto en el input
         const today = new Date().toISOString().split('T')[0];
         dateInput.value = today;
 
@@ -353,13 +411,10 @@
             return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
         };
 
-        // Función para formatear la fecha que viene de Google Sheets
         const formatDate = (dateString) => {
             if (!dateString) return '';
             const d = new Date(dateString);
-            // Si la fecha no es válida, devolvemos string vacío
             if (isNaN(d.getTime())) return ''; 
-            // Formato DD/MM/YYYY
             return d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
         };
 
@@ -377,8 +432,6 @@
 
         function updateUI() {
             historyList.innerHTML = '';
-
-            // ORDENAR POR FECHA (Más reciente primero)
             transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
 
             let totalIncome = 0;
@@ -388,17 +441,38 @@
                 historyList.innerHTML = '<li style="color: #888; font-size: 14px; text-align: center; padding: 20px;">No hay movimientos registrados aún.</li>';
             }
 
+            // Agrupador para el resumen mensual
+            const monthlyData = {};
+
             transactions.forEach((t, index) => {
                 const amount = parseFloat(t.amount) || 0; 
                 if (t.type === 'income') totalIncome += amount;
                 else totalExpense += amount;
 
+                // --- Lógica para agrupar por mes ---
+                if (t.date) {
+                    const dateObj = new Date(t.date);
+                    const monthKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}`;
+                    
+                    if (!monthlyData[monthKey]) {
+                        // Formatear nombre del mes (Ej: "Octubre 2026")
+                        const monthName = dateObj.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+                        monthlyData[monthKey] = { 
+                            name: monthName.charAt(0).toUpperCase() + monthName.slice(1), 
+                            income: 0, 
+                            expense: 0 
+                        };
+                    }
+                    
+                    if (t.type === 'income') monthlyData[monthKey].income += amount;
+                    else monthlyData[monthKey].expense += amount;
+                }
+
+                // --- Renderizar historial normal ---
                 const li = document.createElement('li');
                 li.classList.add('history-item', t.type);
-                
                 const sign = t.type === 'income' ? '+' : '-';
                 
-                // Insertamos la fecha en el HTML
                 li.innerHTML = `
                     <div class="item-info">
                         <div class="item-header">
@@ -415,21 +489,35 @@
                 historyList.appendChild(li);
             });
 
+            // --- Renderizar Resumen Mensual ---
+            renderMonthlySummary(monthlyData);
+
             const totalBalance = totalIncome - totalExpense;
             balanceEl.innerText = formatMoney(totalBalance);
             incomeEl.innerText = formatMoney(totalIncome);
             expenseEl.innerText = formatMoney(totalExpense);
 
+            // --- Gráfico Corregido (Sin Infinity) ---
             const totalMovement = totalIncome + totalExpense;
             if (totalMovement > 0) {
                 const incomePercent = (totalIncome / totalMovement) * 100;
                 chartEl.style.background = `conic-gradient(var(--green) 0% ${incomePercent}%, var(--red) ${incomePercent}% 100%)`;
                 
-                const savingsPercent = totalIncome > 0 ? Math.round((totalBalance / totalIncome) * 100) : 0;
-                if(totalBalance > 0) {
-                     chartTextEl.innerHTML = `${savingsPercent}%<br>Ahorro`;
+                if (totalIncome === 0) {
+                    // Si hay gastos pero CERO ingresos
+                    chartTextEl.innerHTML = `100%<br>Gasto`;
+                } else if (totalExpense === 0) {
+                    // Si hay ingresos pero CERO gastos
+                    chartTextEl.innerHTML = `100%<br>Ahorro`;
                 } else {
-                     chartTextEl.innerHTML = `${Math.round((totalExpense/totalIncome)*100)}%<br>Gasto`;
+                    // Si hay de todo, calcular porcentaje
+                    const savingsPercent = Math.round((totalBalance / totalIncome) * 100);
+                    if(totalBalance > 0) {
+                         chartTextEl.innerHTML = `${savingsPercent}%<br>Ahorro`;
+                    } else {
+                         const expensePercent = Math.round((totalExpense/totalIncome) * 100);
+                         chartTextEl.innerHTML = `${expensePercent}%<br>Gasto`;
+                    }
                 }
             } else {
                 chartEl.style.background = `conic-gradient(var(--input-bg) 0% 100%)`;
@@ -437,11 +525,43 @@
             }
         }
 
+        // --- Nueva función para el resumen ---
+        function renderMonthlySummary(data) {
+            monthlySummaryList.innerHTML = '';
+            
+            // Obtener las llaves (meses) y ordenarlas de más reciente a más antiguo
+            const sortedMonths = Object.keys(data).sort((a, b) => b.localeCompare(a));
+
+            if (sortedMonths.length === 0) {
+                monthlySummaryList.innerHTML = '<div style="color:#888; font-size:12px; text-align:center;">Sin datos mensuales</div>';
+                return;
+            }
+
+            sortedMonths.forEach(monthKey => {
+                const month = data[monthKey];
+                const netBalance = month.income - month.expense;
+                const balanceClass = netBalance >= 0 ? 'pos' : 'neg';
+                const balanceSign = netBalance >= 0 ? '+' : '';
+
+                const monthDiv = document.createElement('div');
+                monthDiv.classList.add('month-item');
+                monthDiv.innerHTML = `
+                    <div class="month-header">${month.name}</div>
+                    <div class="month-data">
+                        <span class="income">Ing: ${formatMoney(month.income)}</span>
+                        <span class="expense">Gas: ${formatMoney(month.expense)}</span>
+                        <span class="balance ${balanceClass}">Neto: ${balanceSign}${formatMoney(netBalance)}</span>
+                    </div>
+                `;
+                monthlySummaryList.appendChild(monthDiv);
+            });
+        }
+
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
 
             const transaction = {
-                date: dateInput.value, // <-- Enviamos la fecha
+                date: dateInput.value,
                 desc: descInput.value,
                 amount: parseFloat(amountInput.value),
                 category: categoryInput.value,
@@ -459,7 +579,7 @@
                 });
                 
                 form.reset();
-                dateInput.value = today; // Restaurar la fecha de hoy
+                dateInput.value = today; 
                 descInput.focus();
                 
                 setTimeout(async () => {
